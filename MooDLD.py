@@ -7,6 +7,7 @@ import tkMessageBox as tm
 import tkFileDialog
 import Tkinter
 import mechanize
+from Crypto.Cipher import DES
 
 moodle = 'http://moodle.iitb.ac.in/login/index.php'
 # Create a browser instance
@@ -23,17 +24,19 @@ downloadlinks = []
 online_courses = []
 #Stores name of user
 myname = ''
+#Boolean for force terminate Download
+stop_DLD = False
 #Boolean for whether DLD files is initiated once
 auto_download = False
 
-if os.path.exists('Cred.txt'):
-    file_pref = open('Cred.txt', 'r')
+if os.path.exists('Cred'):
+    file_pref = open('Cred', 'r')
     lines = file_pref.readlines()
     if len(lines) > 4:
         x = lines[4].replace('\n', '')
         if x == '1':
             auto_download = True
-
+    file_pref.close()
 
 '''
 Flow Of Control:
@@ -54,20 +57,21 @@ If saved credentials are found it moves on to Home.
 -----
 Home has following options:
 
-1.  DLD files- Checks if "Preferences.txt" exists. If not Pref_Screen is opened.
+1.  DLD files- Checks if "Preferences" exists. If not Pref_Screen is opened.
     Else, courses stored in preferences are opened and their materials retrieved.
 
 2.  Preferences- Open the Pref_Screen which loads online_courses[] from moodle.
-    Checks for existence of courses in "Preferences.txt", if found, online_courses[i] parameters for corresponding course are updated.
+    Checks for existence of courses in "Preferences", if found, online_courses[i] parameters for corresponding course are updated.
     If a new course is found => get_nf_link() for that course. And set default parameters.
     Loads all online_courses as courseboxes (list of checkboxes and buttons).
 
-    Save Settings- Saves the courseboxes and their corresponding parameters from online_courses to "Preferences.txt".
+    Save Settings- Saves the courseboxes and their corresponding parameters from online_courses to "Preferences".
     (Except directory as it may be changed. Directory is saved from courseboxes)
 
 3.  Logout- Logs out and removes saved credentials and closes browser instance. Navigates to LoginFrame
 
 '''
+
 
 class ScrollableFrame(Frame):
 
@@ -249,49 +253,64 @@ class LoginFrame(Frame):
         br = mechanize.Browser()
         t.log('Opening Moodle...')
 
-        # If Cred.txt exists check for saved credentials
+        # If Cred exists check for saved credentials
 
-        if self.check_connection() and os.path.exists('Cred.txt'):
-            with open('Cred.txt', 'r') as Cred:
+        if self.check_connection() and os.path.exists('Cred'):
+            with open('Cred', 'r') as Cred:
                 cred = Cred.readlines()
 
                 # if credentials are found, login. else do nothing
 
-                if int(cred[0][0]) == 1:
-                    self.login(str((cred[1])[:cred[1].index('\n')]),
-                               str((cred[2])[:cred[2].index('\n')]))
+                if cred[0][0] == "1":
+                    des = DES.new('01234567', DES.MODE_ECB)
+                    space_pass = des.decrypt(str((cred[2])[:cred[2].index('\n')]).decode('hex'))[-1:]
+                    decrypted_username = des.decrypt(str((cred[1])[:cred[1].index('\n')]).decode('hex'))
+                    decrypted_password = des.decrypt(str((cred[2])[:cred[2].index('\n')]).decode('hex'))[:-(int(space_pass))]
+                    self.login(decrypted_username, decrypted_password)
                     br.open(moodle)
 
-    # On login button click
     def _login_btn_clicked(self):
 
         '''
         On login button click
         '''
         t.log('Attempting login...')
-
-        #Check for connection and write to Cred.txt
+        #Check for connection and write to Cred
         if self.check_connection():
-            with open('Cred.txt', 'w') as text_file:
-                if self.keep_me_logged_in.get():
-                    text_file.write(str(self.keep_me_logged_in.get()) + '\n')
-                    text_file.write(self.username.get() + '\n')
-                    text_file.write(self.password.get() + '\n')
-                    text_file.write('C:/' + '\n')
-                    text_file.write('1' + '\n')
-                    #Default directory: C:/
-                    #Default auto download ON
-                else:
-                    text_file.write(str(self.keep_me_logged_in.get()) + '\n')
-                    text_file.write('\n')
-                    text_file.write('\n')
-                    text_file.write('C:/')
-                    text_file.write('1' + '\n')
-                text_file.close()
+            #Default cred content excluding keep_me_logged_in, username and password.
+            #Default directory: C:/ Default auto download ON
+            lines = ["\n","\n","\n","Select Root Directory for all courses\n","1\n"]
+            if os.path.exists("Cred"):
+                file_cred = open('Cred', 'r')
+                lines = file_cred.readlines()
+                file_cred.close()
 
-                self.login(self.username.get(), self.password.get())
+            lines[0] = str(self.keep_me_logged_in.get()) + '\n'
+            if self.keep_me_logged_in.get():
+                des = DES.new('01234567', DES.MODE_ECB)
+                username = self.username.get()
+                password = self.password.get()
+                space_pass = 8 - len(password) % 8
+                username += ' ' * (8 - len(username) % 8)
+                password = password + ' ' * ((8 - len(password) % 8) - 1) + str(space_pass)
+                encrypted_username = des.encrypt(username).encode('hex')
+                encrypted_password = des.encrypt(password).encode('hex')
+                lines[1] = encrypted_username + '\n'
+                lines[2] = encrypted_password + '\n'
 
-    #Submit form using arguments and set myname to username
+            else:
+                lines[1] = '\n'
+                lines[2] = '\n'
+
+            file_cred = open('Cred', 'w')
+            file_cred.writelines(lines)
+            file_cred.close()
+
+            if lines[4][0] == "1":
+                add_to_startup()
+
+            self.login(self.username.get(), self.password.get())
+
     def login(self, username, password):
 
         '''
@@ -327,7 +346,6 @@ class LoginFrame(Frame):
             m.update()
             return 0
 
-    #Go to Home screen
     def new_window(self):
 
         '''
@@ -350,12 +368,15 @@ class Home(Frame):
         self.Name = 'Welcome ' + str(myname)
         self.label_1 = Label(self, text=self.Name, justify=Tkinter.LEFT)
         self.label_1.grid(row=0, pady=5)
-        self.sync = Button(self, text="DLD Files", command=self.dld)
+        self.sync = Button(self, text="DLD Files", command=self.DLD)
         self.sync.grid(row=1, pady=5)
         self.pref = Button(self, text="Preferences", command=self.pref)
-        self.pref.grid(row=2, pady=5)
+        self.pref.grid(row=3, pady=5)
         self.logout = Button(self, text="Logout", command=self.logout)
-        self.logout.grid(row=3, pady=5)
+        self.logout.grid(row=4, pady=5)
+        self.stop = Button(self, text="Stop DLD", command=self.stopDLD)
+        self.stop.grid(row=2, pady=5)
+        self.stop.config(state='disabled')
 
         #Download automatically on launch
         if auto_download is True:
@@ -366,7 +387,7 @@ class Home(Frame):
 
         '''
         Retrieve from News Forum when passed nfurl i.e forum/view.php
-        Passed arguments forum url, directory, course number (as appearing in Preferences.txt)
+        Passed arguments forum url, directory, course number (as appearing in Preferences)
         '''
 
         m.update()
@@ -381,7 +402,7 @@ class Home(Frame):
         br.open(url)
 
         #Read lines from Preferences. Obtain last visited discussion for course at index=number
-        preferences = open("Preferences.txt", "r")
+        preferences = open("Preferences", "r")
         lines = preferences.readlines()
         lasturl = (lines[7*number+6])[:lines[7*number+6].index("\n")]
         preferences.close()
@@ -390,6 +411,7 @@ class Home(Frame):
         flag = 0
 
         #create an array of all discussion links (self.urls)
+        #Newer threads come first in br.links()
         for link in br.links(url_regex="http://moodle.iitb.ac.in/mod/forum/discuss.php"):
             if link.url == lasturl:
                 break
@@ -397,17 +419,6 @@ class Home(Frame):
             if link.url not in self.urls:
                 flag = 1
                 self.urls.append(link.url)
-
-        #Find newlasturl (last visited disussion/thread)
-        #(Order of threads is in reverse. i.e Newest first)
-        if flag == 1:
-            newlasturl = self.urls[0]+'\n'
-
-            #Update Preferences.txt with newlasturl
-            lines[number*7+6] = newlasturl
-            preferences = open("Preferences.txt", "w")
-            preferences.writelines(lines)
-            preferences.close()
 
         #iterating through every discussion
         for url in self.urls:
@@ -421,23 +432,42 @@ class Home(Frame):
 
             #Download all downloadables
             for link in self.nflinks:
-                m.update()
-                br.open(link.url)
-                url_text = br.geturl()
-                if br.geturl().endswith('forcedownload=1'):
-                    url_text = br.geturl()[:-16]
-                file_extension = '.' + url_text.rsplit('.', 1)[-1]
-                file_name = (url_text.rsplit('.', 1)[0]).rsplit('/', 1)[-1]
-                file_name = urllib.unquote_plus(file_name)
-                if file_extension in ['.pdf', '.doc', '.ppt', '.pptx', '.docx', '.xls', '.xlsx', '.cpp', '.h', '.html', '.py', '.css', '.tex', '.java']:
-                    if not os.path.exists(directory + file_name + file_extension):
-                        if not link.url in downloadlinks:
-                            t.log('Downloading ' + file_name
-                                  + file_extension + ' to ' + directory)
-                            if not os.path.isdir(directory):
-                                os.makedirs(directory)
-                            br.retrieve(link.url, directory + file_name + file_extension)
-                            downloadlinks.append(link.url)
+                if stop_DLD:
+                    #Set flag 0 so that newlasturl is not updated, as all new threads may not be downloaded when force killed.
+                    flag=0
+                    break
+                else:
+                    m.update()
+                    br.open(link.url)
+                    url_text = br.geturl()
+                    if br.geturl().endswith('forcedownload=1'):
+                        url_text = br.geturl()[:-16]
+                    file_extension = '.' + url_text.rsplit('.', 1)[-1]
+                    file_name = (url_text.rsplit('.', 1)[0]).rsplit('/', 1)[-1]
+                    file_name = urllib.unquote_plus(file_name)
+                    if file_name.endswith(file_extension):
+                        file_name = file_name[:-len(file_extension)]
+                    if file_extension in ['.pdf', '.doc', '.ppt', '.pptx', '.docx', '.xls', '.xlsx',
+                                          '.cpp', '.h', '.html', '.py', '.css', '.tex', '.java']:
+                        if not os.path.exists(directory + file_name + file_extension):
+                            if not link.url in downloadlinks:
+                                t.log('Downloading ' + file_name
+                                      + file_extension + ' to ' + directory)
+                                if not os.path.isdir(directory):
+                                    os.makedirs(directory)
+                                br.retrieve(link.url, directory + file_name + file_extension)
+                                downloadlinks.append(link.url)
+
+        #Find newlasturl (last visited disussion/thread)
+        #(Order of threads is in reverse. i.e Newest first)
+        if flag == 1:
+            newlasturl = self.urls[0]+'\n'
+
+            #Update Preferences with newlasturl
+            lines[number*7+6] = newlasturl
+            preferences = open("Preferences", "w")
+            preferences.writelines(lines)
+            preferences.close()
 
 
     def retrieve(self, url, directory):
@@ -470,102 +500,117 @@ class Home(Frame):
 
         #Downlod all downloadables from self.links
         for link in self.links:
-            m.update()
-            br.open(link.url)
-            url_text = br.geturl()
-            if br.geturl().endswith('forcedownload=1'):
-                url_text = br.geturl()[:-16]
-            file_extension = '.' + url_text.rsplit('.', 1)[-1]
-            if file_extension in ['.pdf', '.doc', '.ppt', '.pptx', '.docx', '.xls', '.xlsx', '.cpp', '.h', '.html', '.py', '.css', '.tex', '.java']:
+            if stop_DLD:
+                break
+            else:
+                m.update()
+                br.open(link.url)
+                url_text = br.geturl()
+                if br.geturl().endswith('forcedownload=1'):
+                    url_text = br.geturl()[:-16]
+                file_extension = '.' + url_text.rsplit('.', 1)[-1]
+                if file_extension in ['.pdf', '.doc', '.ppt', '.pptx', '.docx', '.xls', '.xlsx',
+                                      '.cpp', '.h', '.html', '.py', '.css', '.tex', '.java']:
 
-                if ']' in link.text:
-                    if not os.path.exists(directory + link.text[link.text.index(']') + 1:]
-                                          + file_extension):
+                    file_name = ""
+                    if ']' in link.text:
+                        file_name = link.text[link.text.index(']') + 1:]
+                    else:
+                        file_name = link.text
+
+                    if file_name.endswith(file_extension):
+                        file_name = file_name[:-len(file_extension)]
+
+                    if not os.path.exists(directory + file_name + file_extension):
                         if not link.url in downloadlinks:
-                            t.log('Downloading ' + link.text[link.text.index(']') + 1:]
+                            t.log('Downloading ' + file_name
                                   + file_extension + ' to ' + directory)
                             if not os.path.isdir(directory):
                                 os.makedirs(directory)
-                            br.retrieve(link.url, directory + link.text[link.text.index(']') + 1:]
-                                        + file_extension)
+                            br.retrieve(link.url, directory + file_name + file_extension)
                             downloadlinks.append(link.url)
                 else:
-                    if not os.path.exists(directory + link.text + file_extension):
-                        if not link.url in downloadlinks:
-                            t.log('Downloading ' + link.text
-                                  + file_extension + ' to ' + directory)
-                            if not os.path.isdir(directory):
-                                os.makedirs(directory)
-                            br.retrieve(link.url, directory + link.text + file_extension)
-                            downloadlinks.append(link.url)
-            else:
-                #Retrieve from folders
-                if (br.geturl().startswith('http://moodle.iitb.ac.in/mod/folder')
-                        and link.url not in downloaded
-                        and link.text.startswith('[IMG]')):
-                    foldername = br.title()[br.title().index(':') + 2:]
-                    newpath = directory + foldername
-                    if not os.path.exists(newpath):
-                        os.makedirs(newpath)
-                    t.log('Retrieving from ' + foldername + ' at '
-                          + newpath)
-                    downloaded.append(link.url)
-                    self.retrieve(link.url, newpath + '/')
+                    #Retrieve from folders
+                    if (br.geturl().startswith('http://moodle.iitb.ac.in/mod/folder')
+                            and link.url not in downloaded
+                            and link.text.startswith('[IMG]')):
+                        foldername = br.title()[br.title().index(':') + 2:]
+                        newpath = directory + foldername
+                        if not os.path.exists(newpath):
+                            os.makedirs(newpath)
+                        t.log('Retrieving from ' + foldername + ' at '
+                              + newpath)
+                        downloaded.append(link.url)
+                        self.retrieve(link.url, newpath + '/')
 
-                #Retrieve Assignments
-                if br.geturl().startswith('http://moodle.iitb.ac.in/mod/assign') \
-                                            and link.url not in downloaded:
-                    downloaded.append(link.url)
-                    if directory.endswith("Assignments/"):
-                        newpath = directory[:-1]
-                    else:
-                        newpath = directory + "Assignments"
-                    if not os.path.exists(newpath):
-                        os.makedirs(newpath)
-                    self.retrieve(link.url, newpath + '/')
+                    #Retrieve Assignments
+                    if br.geturl().startswith('http://moodle.iitb.ac.in/mod/assign') \
+                                                and link.url not in downloaded:
+                        downloaded.append(link.url)
+                        if directory.endswith("Assignments/"):
+                            newpath = directory[:-1]
+                        else:
+                            newpath = directory + "Assignments"
+                        if not os.path.exists(newpath):
+                            os.makedirs(newpath)
+                        self.retrieve(link.url, newpath + '/')
 
-            br.back()
+            #br.back()
             self.pack()
 
+    def stopDLD(self):
+        '''
+        On click of Stop DLD button
+        '''
 
-    def dld(self):
+        global t, stop_DLD
+        t.log('Terminating downloads.')
+        stop_DLD = True
+
+    def DLD(self):
 
         '''
         On click of DLD Files button
         '''
 
-        global t
+        global t, stop_DLD
         t.log('Downloading files, Please do not close until complete!')
         self.sync.config(state='disabled')
         self.pref.config(state='disabled')
         self.logout.config(state='disabled')
+        self.stop.config(state='normal')
         urls = []
         nfurls = []
         directories = []
+        stop_DLD = False
 
-        #Open Preferences.txt and call retrieve functions
-        if os.path.exists('Preferences.txt'):
-            file_pref = open('Preferences.txt', 'r')
+        #Open Preferences and call retrieve functions
+        if os.path.exists('Preferences'):
+            file_pref = open('Preferences', 'r')
             lines = file_pref.readlines()
             n = len(lines) / 7
             if len(lines):
                 for number in range(n):
-                    urls.append(lines[7 * number + 2][:lines[7 * number + 2].index('\n')])
-                    directories.append(lines[7 * number + 3][:lines[7 * number + 3].index('\n')])
-                    nfurls.append(lines[7*number+4][:lines[7*number+4].index("\n")])
-                    if (lines[7 * number])[:lines[7 * number].index('\n')] == '1':
-                        t.log('Retrieving from ' + lines[7 * number+ 1]
-                              [:lines[7 * number + 1].index('\n')] + ' at ' + directories[number])
-                        self.retrieve(urls[number], directories[number])
-                        t.log("Retrieving from "+ lines[7*number+1][:lines[7*number+1].index("\n")]
-                              + " News Forum at " + directories[number] + 'News Forum/')
-                        self.nfretrieve(nfurls[number], directories[number] + 'News Forum/', number)
+                    if stop_DLD:
+                        break
+                    else:
+                        urls.append(lines[7 * number + 2][:lines[7 * number + 2].index('\n')])
+                        directories.append(lines[7 * number + 3][:lines[7 * number + 3].index('\n')])
+                        nfurls.append(lines[7*number+4][:lines[7*number+4].index("\n")])
+                        if (lines[7 * number])[:lines[7 * number].index('\n')] == '1':
+                            t.log('Retrieving from ' + lines[7 * number+ 1]
+                                  [:lines[7 * number + 1].index('\n')] + ' at ' + directories[number])
+                            self.retrieve(urls[number], directories[number])
+                            t.log("Retrieving from "+ lines[7*number+1][:lines[7*number+1].index("\n")]
+                                  + " News Forum at " + directories[number] + 'News Forum/')
+                            self.nfretrieve(nfurls[number], directories[number] + 'News Forum/', number)
             t.log("Successfully synced with Moodle!")
             self.sync.config(state='normal')
             self.pref.config(state='normal')
             self.logout.config(state='normal')
+            self.stop.config(state='disabled')
 
-            #If Preferences.txt does not exist take user to Preferences screen
+            #If Preferences does not exist take user to Preferences screen
         else:
             t.log('Please set Preferences first!')
             self.sync.config(state='normal')
@@ -574,7 +619,7 @@ class Home(Frame):
             self.destroy()
             self.newWindow = Pref_Screen(self.master)
 
-    #On Click Preferences button
+
     def pref(self):
 
         '''
@@ -586,16 +631,24 @@ class Home(Frame):
         self.destroy()
         self.newWindow = Pref_Screen(self.master)
 
-    #On Click Logout button
     def logout(self):
 
         '''
         On Click Logout button
         '''
+        lines = ["\n","\n","\n","C:/","\n","1","\n"]
+        if os.path.exists("Cred"):
+            file_cred = open('Cred', 'r')
+            lines = file_cred.readlines()
+            file_cred.close()
 
-        text_file = open('Cred.txt', 'w')
-        text_file.write('0\n')
-        text_file.close()
+            lines[0] = '\n'
+            lines[1] = '\n'
+            lines[2] = '\n'
+
+        file_cred = open('Cred', 'w')
+        file_cred.writelines(lines)
+        file_cred.close()
         t.log('Logout successful!')
         br.close()
         self.destroy()
@@ -612,17 +665,14 @@ class Pref_Screen(Frame):
         '''
         On CLick Select All button
         '''
-
         n = len(online_courses)
         for i in range(0, n):
             courseboxes[i].checkbox.select()
 
-    #On CLick Deselect All button
     def dall(self):
         '''
         On CLick Deselect All button
         '''
-
         n = len(online_courses)
         for i in range(0, n):
             courseboxes[i].checkbox.deselect()
@@ -631,9 +681,9 @@ class Pref_Screen(Frame):
         '''
         On CLick Save Settings button
         '''
-        #Saves courseboxes and online_courses data to Preferences.txt
-        open('Preferences.txt', 'w').close()
-        preferences = open('Preferences.txt', 'w')
+        #Saves courseboxes and online_courses data to Preferences
+        open('Preferences', 'w').close()
+        preferences = open('Preferences', 'w')
         for i in range(0, len(online_courses)):
             x = str(courseboxes[i].directory.get())
             if not x.endswith('/'):
@@ -653,16 +703,24 @@ class Pref_Screen(Frame):
         self.frame.destroy()
         self.newWindow = Home(m)
 
-        #Save root directory address to Cred.txt
-        creds = open('Cred.txt', 'r')
+        #Save root directory address to Cred
+        creds = open('Cred', 'r')
         lines = creds.readlines()
         creds.close()
 
-        creds = open('Cred.txt', 'w')
+        creds = open('Cred', 'w')
         lines[3] = self.root_dir_box.directory.get() + '\n'
         lines[4] = str(self.auto.get()) + '\n'
+
         creds.writelines(lines)
         creds.close()
+
+        #Add key to registry for startup launch
+        if self.auto.get() == 1:
+            add_to_startup()
+        #Remove key from registry for starup launch
+        else:
+            remove_from_startup()
 
     def load_online_courses(self):
         '''
@@ -675,19 +733,18 @@ class Pref_Screen(Frame):
 
     def update_from_preferences(self, n):
         '''
-        Finds courses from Preferences.txt and updates parameters
+        Finds courses from Preferences and updates parameters
         for corresponding course in online_courses
         '''
 
-        if os.path.exists('Preferences.txt'):
-            file_pref = open('Preferences.txt', 'r')
+        if os.path.exists('Preferences'):
+            file_pref = open('Preferences', 'r')
             lines = file_pref.readlines()
             TotalInPreferences = len(lines) / 7
             if len(lines):
                 for number in range(0, TotalInPreferences):
                     for i in range(0, n):
                         if online_courses[i].mainlink in lines[7 * number + 2]:
-                            #print "Found match for " + online_courses[i].name
                             online_courses[i].directory = lines[7 * number + 3]\
                                                         [:lines[7 * number + 3].index('\n')]
                             online_courses[i].chkbox = lines[7 * number]\
@@ -695,16 +752,10 @@ class Pref_Screen(Frame):
                             online_courses[i].nflink = lines[7 * number + 4]\
                                                      [:lines[7 * number + 4].index('\n')]
                             break
-                        '''
-                        else:
-                            print lines[7 * number + 2]
-                            print online_courses[i].mainlink
-                        '''
 
         #get_nf_link for all courses that don't have an nflink
         for i in range(0, n):
             if online_courses[i].nflink is "":
-                #print "Finding news forum link for " + online_courses[i].name
                 online_courses[i].get_nf_link()
 
     def __init__(self, master):
@@ -744,8 +795,8 @@ class Pref_Screen(Frame):
                                    variable=self.auto)
         self.autoDLD.grid(row=0, column=0, sticky="w")
 
-        if os.path.exists('Cred.txt'):
-            file_pref = open('Cred.txt', 'r')
+        if os.path.exists('Cred'):
+            file_pref = open('Cred', 'r')
             lines = file_pref.readlines()
             if len(lines) > 4:
                 x = lines[4].replace('\n', '')
@@ -815,8 +866,8 @@ class box(Frame):
                                  command=self.rootgetdir)
             self.browse.grid(row=1, column=1)
 
-            if os.path.exists('Cred.txt'):
-                file_pref = open('Cred.txt', 'r')
+            if os.path.exists('Cred'):
+                file_pref = open('Cred', 'r')
                 lines = file_pref.readlines()
                 if len(lines) > 4:
                     self.directory.set(lines[3].replace('\n', ''))
@@ -828,6 +879,13 @@ class box(Frame):
             self.label_dir = Label(master.interior, textvariable=self.directory)
             self.label_dir.grid(row=1, column=2)
 
+def add_to_startup():
+    #Find path to exe file from current working directory
+    exe_path = os.path.join(os.getcwd(),"MooDLD.exe")
+    os.popen("REG ADD \"HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run\" /V \"MooDLD\" /t REG_SZ /F /D " + exe_path)
+
+def remove_from_startup():
+    os.popen("REG DELETE \"HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run\" /V \"MooDLD\" /F")
 
 #Main Program
 m = Tkinter.Tk()
